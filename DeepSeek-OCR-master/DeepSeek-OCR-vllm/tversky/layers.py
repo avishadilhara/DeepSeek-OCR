@@ -137,9 +137,25 @@ class TverskyProjection(nn.Module):
         
         Smooth minimum provides better gradient flow during training
         compared to hard minimum which has sparse gradients.
+        
+        Args:
+            x_features: Input features [..., num_features]
+            p_features: Prototype features [num_outputs, num_features]
+        
+        Returns:
+            Similarity scores [..., num_outputs]
         """
-        x_expanded = x_features.unsqueeze(-2)
-        p_expanded = p_features
+        # Save original shape for later
+        orig_shape = x_features.shape[:-1]  # [...] without features dim
+        num_features = x_features.shape[-1]
+        num_outputs = p_features.shape[0]
+        
+        # Flatten x_features to 2D for efficient computation: [N, num_features]
+        x_flat = x_features.reshape(-1, num_features)
+        
+        # Expand for broadcasting: [N, 1, num_features] vs [1, num_outputs, num_features]
+        x_expanded = x_flat.unsqueeze(1)  # [N, 1, num_features]
+        p_expanded = p_features.unsqueeze(0)  # [1, num_outputs, num_features]
         
         # Common features: min(x_f, p_f)
         if self.use_smooth_min:
@@ -168,7 +184,11 @@ class TverskyProjection(nn.Module):
         numerator = common_score
         denominator = common_score + self.alpha * x_dist_score + self.beta * p_dist_score + self.eps
         
-        return self.gamma * (numerator / denominator)
+        similarity = self.gamma * (numerator / denominator)  # [N, num_outputs]
+        
+        # Reshape back to original shape: [..., num_outputs]
+        output_shape = orig_shape + (num_outputs,)
+        return similarity.reshape(output_shape)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_features = self.compute_feature_activations(x)

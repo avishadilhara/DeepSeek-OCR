@@ -102,37 +102,48 @@ def analyze_tversky_parameters(model: nn.Module) -> Dict[str, Dict[str, float]]:
     return analysis
 
 
-def monitor_tversky_health(model: nn.Module) -> List[str]:
-    """Check Tversky layer health during training. Returns list of warnings."""
-    
+def monitor_tversky_health(model):
+    """Monitor Tversky layer health with memory optimization"""
     warnings = []
     
     for name, module in model.named_modules():
-        if hasattr(module, 'alpha') and hasattr(module, 'beta'):
-            alpha = module.alpha.item() if hasattr(module.alpha, 'item') else module.alpha
-            beta = module.beta.item() if hasattr(module.beta, 'item') else module.beta
-            gamma = module.gamma.item() if hasattr(module.gamma, 'item') else module.gamma
+        if hasattr(module, 'prototype_bank'):
+            # FIXED: Move to CPU and process in chunks to avoid OOM
+            with torch.no_grad():
+                protos = module.prototype_bank.data.cpu()  # Move to CPU
+                
+                # Check for dead prototypes
+                proto_norms = protos.norm(dim=-1)
+                dead_protos = (proto_norms < 0.01).sum().item()
+                if dead_protos > 0:
+                    warnings.append(f"{name}: {dead_protos} dead prototypes")
+                
+                # FIXED: Only check similarity if not too large
+                num_protos = protos.shape[0]
+                if num_protos < 1000:  # Only for manageable sizes
+                    protos_norm = protos / (protos.norm(dim=-1, keepdim=True) + 1e-8)
+                    
+                    # Compute in chunks to avoid OOM
+                    chunk_size = 100
+                    max_sim = 0
+                    for i in range(0, num_protos, chunk_size):
+                        chunk = protos_norm[i:i+chunk_size]
+                        sim_chunk = torch.mm(chunk, protos_norm.T)
+                        sim_chunk.fill_diagonal_(0)
+                        max_sim = max(max_sim, sim_chunk.max().item())
+                    
+                    if max_sim > 0.95:
+                        warnings.append(f"{name}: High prototype similarity: {max_sim:.3f}")
+                else:
+                    warnings.append(f"{name}: Skipping similarity check (too many prototypes: {num_protos})")
+        
+        if hasattr(module, 'alpha'):
+            alpha = module.alpha.item() if module.alpha.numel() == 1 else module.alpha.mean().item()
+            beta = module.beta.item() if module.beta.numel() == 1 else module.beta.mean().item()
             
-            if alpha / (beta + 1e-8) > 10 or beta / (alpha + 1e-8) > 10:
-                warnings.append(f"{name}: extreme α/β ratio ({alpha:.3f}/{beta:.3f})")
-                
-            if gamma < 1:
-                warnings.append(f"{name}: gamma too small ({gamma:.3f})")
-                
-            if gamma > 100:
-                warnings.append(f"{name}: gamma too large ({gamma:.3f})")
-                
-            if hasattr(module, 'prototype_bank'):
-                protos = module.prototype_bank.data
-                protos_norm = protos / (protos.norm(dim=1, keepdim=True) + 1e-8)
-                sim = (protos_norm @ protos_norm.T).fill_diagonal_(0)
-                
-                if sim.max() > 0.95:
-                    warnings.append(f"{name}: near-duplicate prototypes (max_sim={sim.max():.3f})")
-                    
-                if protos.norm(dim=1).min() < 0.01:
-                    warnings.append(f"{name}: near-zero prototype detected")
-                    
+            if alpha < 0 or beta < 0:
+                warnings.append(f"{name}: Negative Tversky params (α={alpha:.3f}, β={beta:.3f})")
+    
     return warnings
 
 

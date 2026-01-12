@@ -2,7 +2,8 @@ from .layers import (
     TverskyProjection,
     TverskyLMHead,
     TverskyAttentionOutput,
-    TverskyMoEExpert
+    TverskyMoEExpert,
+    smooth_minimum
 )
 
 from .feature_banks import (
@@ -36,6 +37,7 @@ __all__ = [
     'TverskyLMHead',
     'TverskyAttentionOutput',
     'TverskyMoEExpert',
+    'smooth_minimum',
     
     # Feature Banks
     'SharedFeatureBankManager',

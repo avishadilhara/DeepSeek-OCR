@@ -37,6 +37,14 @@ def convert_decoder_to_tversky(
     
     feature_bank_manager.register_to_module(decoder_model)
     
+    # Get additional Tversky parameters from config
+    feature_activation = config.get('feature_activation', 'softplus')
+    use_smooth_min = config.get('use_smooth_min', True)
+    smooth_min_temperature = config.get('smooth_min_temperature', 0.5)
+    init_alpha = config.get('init_alpha', 0.5)
+    init_beta = config.get('init_beta', 0.5)
+    init_gamma = config.get('init_gamma', 10.0)
+    
     # Strategy 1: LM Head Only
     if hasattr(decoder_model, 'lm_head'):
         old_lm_head = decoder_model.lm_head
@@ -45,7 +53,13 @@ def convert_decoder_to_tversky(
             hidden_size=hidden_size,
             vocab_size=vocab_size,
             num_features=num_features,
-            init_from_linear=old_lm_head if isinstance(old_lm_head, nn.Linear) else None
+            init_from_linear=old_lm_head if isinstance(old_lm_head, nn.Linear) else None,
+            feature_activation=feature_activation,
+            use_smooth_min=use_smooth_min,
+            smooth_min_temperature=smooth_min_temperature,
+            init_alpha=init_alpha,
+            init_beta=init_beta,
+            init_gamma=init_gamma
         )
         
         decoder_model.lm_head = new_lm_head
@@ -79,7 +93,9 @@ def convert_decoder_to_tversky(
                     new_proj = TverskyAttentionOutput(
                         hidden_size=module.in_features,
                         num_features=num_features // 2,
-                        shared_bank=shared_bank
+                        shared_bank=shared_bank,
+                        feature_activation=feature_activation,
+                        use_smooth_min=use_smooth_min
                     )
                     
                     setattr(parent, attr_name, new_proj)
@@ -221,6 +237,7 @@ class DeepSeekOCRWithTversky(nn.Module):
 class TverskyModelWrapper:
     """
     Wrapper for easy integration with existing DeepSeek-OCR pipeline.
+    Provides utilities for saving/loading Tversky weights separately.
     """
     
     def __init__(
@@ -237,16 +254,29 @@ class TverskyModelWrapper:
         }
         self.model = None
         
-    def load_and_convert(self, device: str = 'cuda'):
-        """Load base model and convert to Tversky."""
-        # This would integrate with actual model loading
-        # Placeholder for integration
-        raise NotImplementedError("Implement based on your model loading code")
+    def load_and_convert(self, base_model: nn.Module, device: str = 'cuda') -> nn.Module:
+        """
+        Convert a loaded base model to use Tversky layers.
+        
+        Args:
+            base_model: Already loaded DeepSeek-OCR model
+            device: Target device
+            
+        Returns:
+            Model with Tversky layers
+        """
+        self.model = convert_decoder_to_tversky(
+            decoder_model=base_model,
+            config=self.tversky_config,
+            strategy=self.tversky_config.get('conversion_strategy', 'lm_head_only')
+        )
+        self.model = self.model.to(device)
+        return self.model
         
     def save_tversky_weights(self, path: str):
         """Save only the Tversky-specific weights."""
         if self.model is None:
-            raise ValueError("Model not loaded")
+            raise ValueError("Model not loaded. Call load_and_convert first.")
             
         tversky_state = {}
         tversky_keys = {'alpha_raw', 'beta_raw', 'gamma', 'feature_bank', 'prototype_bank'}
@@ -260,18 +290,19 @@ class TverskyModelWrapper:
             'tversky_config': self.tversky_config
         }, path)
         
-    def load_tversky_weights(self, path: str):
+    def load_tversky_weights(self, path: str) -> Dict[str, List[str]]:
         """Load Tversky-specific weights."""
         if self.model is None:
-            raise ValueError("Model not loaded")
+            raise ValueError("Model not loaded. Call load_and_convert first.")
             
-        checkpoint = torch.load(path, map_location='cpu')
+        checkpoint = torch.load(path, map_location='cpu', weights_only=True)
         
-        missing, unexpected = [], []
+        missing, loaded = [], []
         for name, param in checkpoint['tversky_state_dict'].items():
             try:
                 self.model.get_parameter(name).data.copy_(param)
-            except:
+                loaded.append(name)
+            except Exception:
                 missing.append(name)
                 
-        return {'missing': missing, 'unexpected': unexpected}
+        return {'missing': missing, 'loaded': loaded}

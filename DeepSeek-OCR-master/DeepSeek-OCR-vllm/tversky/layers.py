@@ -350,7 +350,9 @@ class TverskyAttentionOutput(nn.Module):
         self,
         hidden_size: int,
         num_features: int = 256,
-        shared_bank: Optional[nn.Parameter] = None
+        shared_bank: Optional[nn.Parameter] = None,
+        feature_activation: str = 'softplus',
+        use_smooth_min: bool = True
     ):
         super().__init__()
         
@@ -359,7 +361,9 @@ class TverskyAttentionOutput(nn.Module):
             out_features=hidden_size,
             num_features=num_features,
             shared_feature_bank=shared_bank,
-            init_gamma=5.0
+            init_gamma=5.0,
+            feature_activation=feature_activation,
+            use_smooth_min=use_smooth_min
         )
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
